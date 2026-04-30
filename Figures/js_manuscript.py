@@ -17,8 +17,6 @@ from scipy.stats import skew,mode,gmean,ranksums,ttest_ind, zscore, kstest
 plt.rcParams['font.family'] = 'sans-serif'
 plt.rcParams['font.sans-serif'] = ["Arial"]
 plt.rcParams['pdf.fonttype'] = 42
-# from mpl_toolkits.mplot3d import Axes3D
-
 ##################################################################################################    
 def summary_stats(tempData,nBins=100,binWidth=0,temp_minVal=np.nan,temp_maxVal=np.nan,\
     calcHist=True,verbose=False, allow_overages = False, splitZeroBin = False, \
