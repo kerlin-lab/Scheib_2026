@@ -57,8 +57,13 @@ dependencies:
 
       # --- Parallel compute (Fig4 only) --------------------------------------
       # Fig4.ipynb builds a dask.distributed LocalCluster for the heavy SMO
-      # passes. These two pins are what the reference environment ships.
-      - dask==2021.12.0
+      # passes. dask and distributed are released in lockstep and distributed
+      # pins its dask exactly (distributed 2022.2.1 requires dask==2022.02.1),
+      # so these two must move together. The reference sled_env happens to hold
+      # dask 2021.12.0 next to distributed 2022.2.1 -- an inconsistent
+      # combination that pip refuses to resolve; 2022.02.1 is the matching dask
+      # release for that distributed.
+      - dask==2022.02.1
       - distributed==2022.2.1
 
       # --- Jupyter runtime ---------------------------------------------------
@@ -68,6 +73,13 @@ dependencies:
       - ipykernel==6.9.1
       - notebook==6.4.11
       - ipympl==0.9.3
+      # notebook 6.4.x declares jupyter-client>=5.3.4 with no upper bound, but
+      # its kernel-management calls break against jupyter-client 8.x. These are
+      # the versions the working reference environment holds -- pin them so a
+      # fresh resolve does not pull 8.x and leave you with a notebook that
+      # cannot start a kernel.
+      - jupyter-client==7.4.9
+      - jupyter-core==5.8.1
 
       # --- Optional ----------------------------------------------------------
       # Not imported by any committed notebook or at js_manuscript_final.py
