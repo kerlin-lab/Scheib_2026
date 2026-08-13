@@ -1,0 +1,22 @@
+[
+  {
+    "anmIdx": 1,
+    "anm": "B00002121774",
+    "ROI_type_key": "dendrites",
+    "ROI_score": 1,
+    "ROI_idx": 48,
+    "page_count": 14,
+    "cluster_label": "Motor CR-Select",
+    "cluster_idx": 29
+  },
+  {
+    "anmIdx": 1,
+    "anm": "B00002121774",
+    "ROI_type_key": "somas",
+    "ROI_score": 1,
+    "ROI_idx": 19,
+    "page_count": 79,
+    "cluster_label": "Motor CR-Select",
+    "cluster_idx": 63
+  }
+]

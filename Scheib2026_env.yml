@@ -1,0 +1,86 @@
+# Scheib_2026 -- conda environment definition
+# Author: Zachary Newman (newmanza@gmail.com)
+# Assistance: Claude claude-opus-5
+# Last updated: 2026-08-13
+#
+# Create and activate:
+#     conda env create -f Scheib2026_env.yml
+#     conda activate Scheib2026_env
+#
+# Register the kernel so the notebooks can select it:
+#     python -m ipykernel install --user --name Scheib2026_env --display-name "Scheib2026_env"
+#
+# The notebooks were last saved against a kernel named `sled_env` (Python 3.8.20);
+# after creating this environment, just pick "Scheib2026_env" in the Jupyter kernel
+# picker -- no notebook edits are needed.
+#
+# Pins are kept in sync by hand with requirements.txt -- edit both together.
+
+name: Scheib2026_env
+
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  # Python 3.8 is the reference interpreter for this project.
+  - python=3.8
+  - pip
+
+  - pip:
+      # --- Core scientific stack ---------------------------------------------
+      # NOTE: numpy MUST stay on the 1.x line. js_manuscript_final.py installs a
+      # compatibility shim (sys.modules.setdefault('numpy._core', numpy.core)) so
+      # that pickles written under numpy 2.x load under numpy 1.x. Installing
+      # numpy>=2 changes the pickle module paths and defeats that shim.
+      - numpy==1.24.4
+      - scipy==1.10.1
+      - pandas==1.4.2
+
+      # --- Statistics / modeling ---------------------------------------------
+      - statsmodels==0.14.0
+      - scikit-learn==1.1.1
+
+      # --- Plotting ----------------------------------------------------------
+      - matplotlib==3.7.5
+      - seaborn==0.12.2
+      - pillow==9.1.1
+
+      # --- Imaging IO --------------------------------------------------------
+      # imagecodecs backs tifffile's compressed-TIFF readers (Fig1 behavior
+      # frames, Fig2 z-stack projections).
+      - tifffile==2022.5.4
+      - imagecodecs==2021.8.26
+
+      # --- Progress bars -----------------------------------------------------
+      - tqdm==4.64.1
+
+      # --- Parallel compute (Fig4 only) --------------------------------------
+      # Fig4.ipynb builds a dask.distributed LocalCluster for the heavy SMO
+      # passes. These two pins are what the reference environment ships.
+      - dask==2021.12.0
+      - distributed==2022.2.1
+
+      # --- Jupyter runtime ---------------------------------------------------
+      # ipympl backs the `%matplotlib widget` cell in Fig1; pinned for
+      # notebook 6.x compatibility.
+      - ipython==8.3.0
+      - ipykernel==6.9.1
+      - notebook==6.4.11
+      - ipympl==0.9.3
+
+      # --- Optional ----------------------------------------------------------
+      # Not imported by any committed notebook or at js_manuscript_final.py
+      # module level; uncomment only if you call the corresponding helper.
+      #
+      # - opencv-python==4.5.5.64   # jsm.readFrames() -- uses cv2, never imported
+      # - joblib==1.1.0             # jsm.run_parallel_bootstrap() -- uses
+      #                             # Parallel/delayed, never imported.
+      #                             # jsm.vectorized_bootstrap() is the numpy-only
+      #                             # equivalent the notebooks actually use.
+      # - ipynbname==2021.3.2       # only for the commented-out auto-PARENT_DIR
+      #                             # block in each notebook's init cell.
+
+# Note on fonts: figure panels are exported with font.sans-serif=['Arial'] and
+# pdf.fonttype=42 (editable text). Arial is not installable via conda/pip -- it
+# must be present on the system for panels to render and export as intended.

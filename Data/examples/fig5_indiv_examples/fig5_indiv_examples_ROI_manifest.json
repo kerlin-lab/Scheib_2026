@@ -1,0 +1,22 @@
+[
+  {
+    "anmIdx": 1,
+    "anm": "B00002121774",
+    "ROI_type_key": "dendrites",
+    "ROI_score": 1,
+    "ROI_idx": 39,
+    "page_count": 11,
+    "cluster_label": "All All_R-Active",
+    "cluster_idx": 257
+  },
+  {
+    "anmIdx": 16,
+    "anm": "B00002213982",
+    "ROI_type_key": "somas",
+    "ROI_score": 1,
+    "ROI_idx": 20,
+    "page_count": 330,
+    "cluster_label": "All All_R-Active",
+    "cluster_idx": 16
+  }
+]
