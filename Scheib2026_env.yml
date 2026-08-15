@@ -1,7 +1,7 @@
 # Scheib_2026 -- conda environment definition
 # Author: Zachary Newman (newmanza@gmail.com)
 # Assistance: Claude claude-opus-5
-# Last updated: 2026-08-13
+# Last updated: 2026-08-14
 #
 # Create and activate:
 #     conda env create -f Scheib2026_env.yml
@@ -10,9 +10,10 @@
 # Register the kernel so the notebooks can select it:
 #     python -m ipykernel install --user --name Scheib2026_env --display-name "Scheib2026_env"
 #
-# The notebooks were last saved against a kernel named `sled_env` (Python 3.8.20);
-# after creating this environment, just pick "Scheib2026_env" in the Jupyter kernel
-# picker -- no notebook edits are needed.
+# The notebooks are saved against a kernel named `scheib2026_env` (display name
+# "Scheib2026_env", Python 3.8.20) -- exactly what the ipykernel install line above
+# creates, so no notebook edits are needed. If the kernel is missing, just pick
+# "Scheib2026_env" in the Jupyter kernel picker.
 #
 # Pins are kept in sync by hand with requirements.txt -- edit both together.
 
@@ -47,8 +48,9 @@ dependencies:
       - pillow==9.1.1
 
       # --- Imaging IO --------------------------------------------------------
-      # imagecodecs backs tifffile's compressed-TIFF readers (Fig1 behavior
-      # frames, Fig2 z-stack projections).
+      # imagecodecs backs tifffile's compressed-TIFF readers. Only Fig1
+      # actually reads TIFFs (the example behavior camera frames); the other
+      # notebooks import tifffile in their init cell without calling it.
       - tifffile==2022.5.4
       - imagecodecs==2021.8.26
 
@@ -67,8 +69,9 @@ dependencies:
       - distributed==2022.2.1
 
       # --- Jupyter runtime ---------------------------------------------------
-      # ipympl backs the `%matplotlib widget` cell in Fig1; pinned for
-      # notebook 6.x compatibility.
+      # No notebook uses `%matplotlib widget` any more, so ipympl is not
+      # required; it stays pinned (at a notebook 6.x-compatible version) only
+      # so the environment matches the reference one.
       - ipython==8.3.0
       - ipykernel==6.9.1
       - notebook==6.4.11
@@ -81,17 +84,26 @@ dependencies:
       - jupyter-client==7.4.9
       - jupyter-core==5.8.1
 
+      # --- Notebook path resolution (required) -------------------------------
+      # Every notebook's init cell calls ipynbname.path() to derive PARENT_DIR
+      # (and from it DATA_DIR and FIG_EXPORT_DIR) from the notebook's own
+      # location, so no absolute paths need editing. The call sits in a
+      # try/except that only prints a warning, but PARENT_DIR is then left
+      # undefined and the next line raises NameError -- so this is required,
+      # not optional. Without it you must set PARENT_DIR by hand in each init
+      # cell.
+      - ipynbname==2021.3.2
+
       # --- Optional ----------------------------------------------------------
       # Not imported by any committed notebook or at js_manuscript_final.py
-      # module level; uncomment only if you call the corresponding helper.
+      # module level. Left installed so the environment matches the reference
+      # one; drop these two lines if you want a leaner install.
       #
       - opencv-python==4.5.5.64   # jsm.readFrames() -- uses cv2, never imported
       - joblib==1.1.0             # jsm.run_parallel_bootstrap() -- uses
                                   # Parallel/delayed, never imported.
                                   # jsm.vectorized_bootstrap() is the numpy-only
                                   # equivalent the notebooks actually use.
-      - ipynbname==2021.3.2       # only for the commented-out auto-PARENT_DIR
-                                  # block in each notebook's init cell.
 
 # Note on fonts: figure panels are exported with font.sans-serif=['Arial'] and
 # pdf.fonttype=42 (editable text). Arial is not installable via conda/pip -- it

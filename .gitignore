@@ -1,2 +1,6 @@
 .ipynb_checkpoints/
-
+.claude/
+dask-worker-space/
+.vscode/
+scratch/
+Data/examples/fig1_behav_examples/B00002213999/240324/run1/20160684_trial_271_0.tiff #full file too large for repo, use the smaller version in the Data/examples/fig1_behav_examples/B00002213999/240324/run1/ directory instead
