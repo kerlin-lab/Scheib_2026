@@ -14,6 +14,31 @@
 #                               resolves the 'preShiftOnly_byTtype'/'postShiftOnly_byTtype' display modes to
 #                               the stored 'byPrePost_byTtype' branch they are a view of, via
 #                               resolve_align_trace_type(), so filtering by one no longer prunes the data away
+#   2026-08-13 (claude-opus-5): added the behavior export helpers — report_behavior_sizes(),
+#                               reduce_behavior_for_repo(), save_behavior_split(),
+#                               find_behavior_split_extension() and load_behavior_split() (plus the
+#                               _behavior_* helpers) — because behavior['mats'] is a list of dicts, which
+#                               sled_general_tools.deep_copy_dict never recurses into, so the export's
+#                               remove_keys/compress_floats never reached the Bpod payload and the
+#                               '<anm>_behavior.pkl' files came out too big to commit;
+#                               masterData_loading() now auto-detects a split behavior export via its
+#                               '_meta' file and falls back to the monolithic '.pkl' when there is none;
+#                               then, once report_behavior_sizes had been run on the real dataset,
+#                               corrected reduce_behavior_for_repo's defaults: 'raw' is 80% of the
+#                               2.44 GB behavior total but IS read by Fig1_behavior.ipynb (the initial
+#                               keep-list survey only grepped .py, missing every notebook), so nothing is
+#                               dropped by default any more and a new raw_days argument thins 'raw' to
+#                               the example days Fig. 1 needs while preserving list length and indexing
+#   2026-08-14 (claude-opus-5): added the raw data inventory helpers for the repo README --
+#                               index_raw_data_paths(), summarize_raw_data_index() and
+#                               format_raw_data_inventory() (plus the _inventory_* helpers) -- which walk
+#                               the per-session imagingRawPath/behaviorRawPath directories summaryInfo
+#                               records and roll file counts / bytes / file types up by session,
+#                               compartment, animal and overall; directories are keyed and scanned once
+#                               each (a behavior day is shared by the dendrite and soma sessions recorded
+#                               from it, so naive per-session sums double-count it), and stored paths are
+#                               re-rooted/remapped onto whatever mounts the current machine has, since
+#                               summaryInfo is pickled with the paths of the machine that built it
 ###################################################
 import os
 import warnings
@@ -458,7 +483,16 @@ def masterData_loading(DATA_DIR):
             print(f"Loading {field} data for {anm}...")
             if not field == 'shiftInfo':
                 if field == 'behavior':
-                    masterData[anm][field] = unpickler(os.path.join(DATA_DIR,anm,field),anm+"_"+field,extension = '.pkl')
+                    # Behavior is written either as one monolithic '<anm>_behavior.pkl' or, when it is too
+                    # big for the repo, as a '<anm>_behavior_meta<ext>' + one '<anm>_behavior_day_<N><ext>'
+                    # per behavior day (save_behavior_split). Prefer the split set when it is present.
+                    behPath = os.path.join(DATA_DIR,anm,field)
+                    behName = anm+"_"+field
+                    behExt  = find_behavior_split_extension(behPath,behName)
+                    if behExt is not None:
+                        masterData[anm][field] = load_behavior_split(behPath,behName,extension=behExt,verbose=False)
+                    else:
+                        masterData[anm][field] = unpickler(behPath,behName,extension = '.pkl')
                 elif field == 'somas' or field == 'dendrites':
                     if isinstance(masterData[anm][field], dict):
                         temp = unpickler(os.path.join(DATA_DIR,anm,field),anm+"_"+field,extension = '.pkl')
@@ -471,6 +505,625 @@ def masterData_loading(DATA_DIR):
 
 
     return masterData
+##################################################################################################
+# Behavior export: size accounting, pruning, and per-day splitting
+#
+# behavior['mats'] / ['trajs'] / ['raw'] are *lists*, one entry per behavior day, and
+# sled_general_tools.deep_copy_dict only recurses into dicts -- so neither its remove_keys nor its
+# float64->float32 pass ever reaches inside them. Everything Bpod wrote (RawEvents, RawData,
+# TrialSettings, SettingsFile) therefore survives into the exported '<anm>_behavior.pkl' at full
+# precision, which is what makes those files too big to commit. reduce_behavior_for_repo does the
+# list-aware pruning, save_behavior_split writes one small metadata file plus one file per behavior
+# day, and load_behavior_split / masterData_loading put it back together.
+_BEHAVIOR_DAY_KEYS      = ('mats','trajs','raw')                        # day-indexed, one entry per behavior day
+_BPOD_KEEP_STATES       = ('TrigTrialStart','SamplePeriod','DelayPeriod','ResponseCue','AnswerPeriod')
+_BPOD_KEEP_EVENTS       = ('Port1In','Port2In')
+_BPOD_KEEP_RAWDATA      = ('OriginalStateData','OriginalStateTimestamps')
+_BPOD_KEEP_TRIALSETTING = ('Autowater',)
+_BPOD_DROP_MAT_KEYS     = ('SettingsFile',)
+
+def _behavior_pkl_bytes(obj,compresslevel=None):
+    """Pickled size of obj in bytes, i.e. what it will actually cost on disk. compresslevel None
+    measures the raw pickle; an int measures the gzipped pickle at that level (slow on big objects,
+    so level 1 is the usual quick proxy)."""
+    import pickle, gzip
+    raw = pickle.dumps(obj,protocol=pickle.HIGHEST_PROTOCOL)
+    if compresslevel:
+        return len(gzip.compress(raw,compresslevel=compresslevel))
+    return len(raw)
+
+def _behavior_cast_floats(node,float_dtype):
+    """Recursive float downcast that, unlike deep_copy_dict, walks lists, tuples and object arrays as
+    well as dicts, so the per-trial payloads inside behavior['mats'] / ['trajs'] / ['raw'] are actually
+    reached. Arrays already at or below the target precision, and every non-float value, are returned
+    untouched. Operates on the node it is given, so hand it a copy."""
+    if float_dtype is None:
+        return node
+    target = np.dtype(float_dtype)
+    if isinstance(node,np.ndarray):
+        if node.dtype == object:
+            for idx,value in np.ndenumerate(node):
+                node[idx] = _behavior_cast_floats(value,float_dtype)
+            return node
+        if np.issubdtype(node.dtype,np.floating) and node.dtype.itemsize > target.itemsize:
+            return node.astype(target)
+        return node
+    if isinstance(node,np.floating):
+        return target.type(node) if node.dtype.itemsize > target.itemsize else node
+    if isinstance(node,dict):
+        for key in node:
+            node[key] = _behavior_cast_floats(node[key],float_dtype)
+        return node
+    if isinstance(node,list):
+        for i in range(len(node)):
+            node[i] = _behavior_cast_floats(node[i],float_dtype)
+        return node
+    if isinstance(node,tuple):
+        return tuple(_behavior_cast_floats(v,float_dtype) for v in node)
+    return node
+
+def _behavior_prune_mat(mat,keep_states,keep_events,keep_rawdata,keep_trialsettings,drop_mat_keys,keep_mat_keys=None):
+    """Prune one day's Bpod struct down to the fields the analysis code reads. Returns a new dict; the
+    input is not modified. Anything not named in the keep-lists is dropped, so widening a keep-list is
+    the way to bring a field back rather than editing this function."""
+    out = {}
+    for key,value in mat.items():
+        if key in drop_mat_keys:
+            continue
+        if keep_mat_keys is not None and key not in keep_mat_keys:
+            continue
+
+        if key == 'RawEvents' and isinstance(value,dict) and 'Trial' in value:
+            trials = value['Trial']
+            pruned_trials = []
+            for trial in (trials if not isinstance(trials,np.ndarray) else list(trials)):
+                if not isinstance(trial,dict):
+                    pruned_trials.append(copy.deepcopy(trial))
+                    continue
+                pruned_trial = {}
+                if isinstance(trial.get('States'),dict):
+                    pruned_trial['States'] = {k:copy.deepcopy(v) for k,v in trial['States'].items()
+                                              if keep_states is None or k in keep_states}
+                if isinstance(trial.get('Events'),dict):
+                    pruned_trial['Events'] = {k:copy.deepcopy(v) for k,v in trial['Events'].items()
+                                              if keep_events is None or k in keep_events}
+                pruned_trials.append(pruned_trial)
+            out[key] = {'Trial':pruned_trials}
+
+        elif key == 'RawData' and isinstance(value,dict):
+            out[key] = {k:copy.deepcopy(v) for k,v in value.items()
+                        if keep_rawdata is None or k in keep_rawdata}
+
+        elif key == 'TrialSettings' and keep_trialsettings is not None:
+            pruned_settings = []
+            for setting in (value if not isinstance(value,np.ndarray) else list(value)):
+                if isinstance(setting,dict) and isinstance(setting.get('GUI'),dict):
+                    pruned_settings.append({'GUI':{k:copy.deepcopy(v) for k,v in setting['GUI'].items()
+                                                   if k in keep_trialsettings}})
+                else:
+                    pruned_settings.append(copy.deepcopy(setting))
+            out[key] = pruned_settings
+
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+##################################################################################################
+def report_behavior_sizes(behavior,compresslevel=None,per_day=True,per_mat_key=True,top_n=None,verbose=True):
+    """
+    Account for where the bytes in one animal's behavior dict actually are, so a pruning/splitting choice
+    is made against measurements instead of guesses. Everything is measured as *pickled* bytes -- the
+    same thing os.path.getsize reports for the written file -- broken down by top-level key, by Bpod
+    'mats' sub-key summed over days (this is normally where the mass is: RawEvents, RawData,
+    TrialSettings and SettingsFile are never pruned by deep_copy_dict because 'mats' is a list), and by
+    behavior day, which is what a per-day split has to fit under the repo's file-size limit. It also
+    counts the float64 payload still in the dict, since none of it was reached by the export's
+    compress_floats pass.
+
+    Example
+    -------
+    # comments indented under a '> only if ...' marker = used only when that other arg is active
+    behavior = masterData[anm]['behavior']   # one animal's behavior dict (pre- or post-compression)
+    compresslevel = None       # None -> measure raw pickle bytes; or 1..9 to measure gzipped bytes (1 = quick proxy)
+    per_day = True             # True | False -> True adds a per-behavior-day breakdown
+    per_mat_key = True         # True | False -> True adds a per-Bpod-key breakdown summed over days
+    top_n = None               # None -> print every row; or int N to print only the N largest rows per section
+    verbose = True             # True | False  (prints the report; the dict is returned either way)
+    importlib.reload(js_manuscript_final)
+    behaviorSizes = js_manuscript_final.report_behavior_sizes(
+        behavior, compresslevel=compresslevel, per_day=per_day, per_mat_key=per_mat_key, top_n=top_n, verbose=verbose)
+
+    Parameters
+    ----------
+    behavior : dict
+        One animal's behavior dict, i.e. masterData[anm]['behavior'] or masterData_compressed[anm]['behavior'].
+    compresslevel : int or None
+        None measures raw pickle bytes. An int (1-9) measures gzip-compressed bytes at that level, which
+        is what a '.pkl.gz' export will cost; level 1 runs much faster than 9 and tracks it closely.
+    per_day : bool
+        If True, also measure each behavior day's share of the day-indexed keys ('mats', 'trajs', 'raw'),
+        which is the size a per-day part file would land at.
+    per_mat_key : bool
+        If True, also measure each Bpod 'mats' sub-key summed across days.
+    top_n : int or None
+        Print only the N largest rows in each section. None prints all of them.
+    verbose : bool
+        If True, print the report. The returned dict is identical either way.
+
+    Returns
+    -------
+    behaviorSizes : dict
+        {'total': int, 'byKey': {key: bytes}, 'byMatKey': {key: bytes}, 'byDay': {day_idx: bytes},
+         'float64_bytes': int, 'compresslevel': compresslevel}. All sizes in bytes.
+
+    Local Dependencies
+    -------------------
+    js_manuscript_final._behavior_pkl_bytes
+        Measures the pickled (optionally gzipped) size of each branch.
+    """
+    sizes = {'total':_behavior_pkl_bytes(behavior,compresslevel),'byKey':{},'byMatKey':{},'byDay':{},
+             'float64_bytes':0,'compresslevel':compresslevel}
+
+    for key,value in behavior.items():
+        sizes['byKey'][key] = _behavior_pkl_bytes(value,compresslevel)
+
+    mats = behavior.get('mats',[])
+    if per_mat_key and len(mats) and isinstance(mats[0],dict):
+        for matKey in mats[0].keys():
+            sizes['byMatKey'][matKey] = sum(_behavior_pkl_bytes(mat[matKey],compresslevel)
+                                            for mat in mats if matKey in mat)
+
+    if per_day:
+        nDays = max([len(behavior[key]) for key in _BEHAVIOR_DAY_KEYS if key in behavior] or [0])
+        for day in range(nDays):
+            payload = {key:behavior[key][day] for key in _BEHAVIOR_DAY_KEYS
+                       if key in behavior and day < len(behavior[key])}
+            sizes['byDay'][day] = _behavior_pkl_bytes(payload,compresslevel)
+
+    def _count_float64(node,seen):
+        if id(node) in seen:
+            return 0
+        seen.add(id(node))
+        if isinstance(node,np.ndarray):
+            if node.dtype == np.float64:
+                return node.nbytes
+            if node.dtype == object:
+                return sum(_count_float64(v,seen) for v in node.ravel())
+            return 0
+        if isinstance(node,np.float64):
+            return 8
+        if isinstance(node,dict):
+            return sum(_count_float64(v,seen) for v in node.values())
+        if isinstance(node,(list,tuple)):
+            return sum(_count_float64(v,seen) for v in node)
+        return 0
+    sizes['float64_bytes'] = _count_float64(behavior,set())
+
+    if verbose:
+        label = 'raw pickle' if not compresslevel else f'gzip level {compresslevel}'
+        print(f"report_behavior_sizes ({label}): total {np.round(sizes['total']/1e6,decimals=2)} MB")
+        def _print_section(title,table):
+            rows = sorted(table.items(),key=lambda kv:-kv[1])
+            if top_n:
+                rows = rows[:top_n]
+            print(f"  {title}")
+            for key,nBytes in rows:
+                pct = 100*nBytes/sizes['total'] if sizes['total'] else 0
+                print(f"    {str(key):<28} {np.round(nBytes/1e6,decimals=2):>10} MB  ({np.round(pct,decimals=1)}%)")
+        _print_section("by top-level key:",sizes['byKey'])
+        if sizes['byMatKey']:
+            _print_section("by Bpod 'mats' key (summed over days):",sizes['byMatKey'])
+        if sizes['byDay']:
+            _print_section("by behavior day (mats+trajs+raw, i.e. one part file):",sizes['byDay'])
+        print(f"  float64 payload still in the dict: {np.round(sizes['float64_bytes']/1e6,decimals=2)} MB "
+              f"(~half of that is recoverable by casting to float32)")
+    return sizes
+##################################################################################################
+def reduce_behavior_for_repo(behavior,drop_keys=(),raw_days=None,keep_states=_BPOD_KEEP_STATES,keep_events=_BPOD_KEEP_EVENTS,keep_rawdata=_BPOD_KEEP_RAWDATA,keep_trialsettings=_BPOD_KEEP_TRIALSETTING,drop_mat_keys=_BPOD_DROP_MAT_KEYS,keep_mat_keys=None,float_dtype='float32',verbose=True):
+    """
+    Prune one animal's behavior dict down to what the analysis code actually reads, doing the list-aware
+    work that sled_general_tools.deep_copy_dict cannot: because 'mats' is a list of dicts, deep_copy_dict
+    never applies remove_keys or its float32 cast inside it, so every exported behavior file still
+    carries the full Bpod RawEvents/RawData/TrialSettings/SettingsFile payload. This walks each day's
+    Bpod struct, keeps only the states, events, RawData arrays and TrialSettings GUI fields that
+    jsimg / ttracking / js_manuscript_final index, and optionally thins 'raw' to a few example days. The
+    result keeps the exact same layout as the input behavior dict, so it can be handed straight to
+    save_behavior_split or to any function that takes masterData[anm]['behavior'].
+
+    Nothing is dropped by default. The two size levers, measured on this dataset (22 animals,
+    2.44 GB of behavior in total):
+
+    - **'raw' is 80% of it** (1.95 GB). It is the per-camera tracking output, and no function in
+      jsimg / ttracking / js_manuscript_final reads it -- but Fig1_behavior.ipynb does, as
+      `trackings = [dayRaw['side'], dayRaw['bottom']]`, for **one day of one example animal** per panel.
+      Use `raw_days` to keep exactly those days rather than dropping the key outright; the newer
+      resub / VOR notebooks instead export that one day to
+      `examples/fig1_behav_examples/<anm>/<day>/run1/rawBehavior.pkl` and read it back from there.
+    - **The Bpod prune takes ~38% off the rest** (mats+trajs 484 MB -> ~300 MB), mostly TrialSettings,
+      then RawEvents and RawData.
+
+    `float_dtype` measured as a no-op on this dataset -- the behavior payload is already float32 (the
+    per-animal float64 count from report_behavior_sizes was 0.0 MB for all 22 animals). It is left on as
+    cheap insurance for animals added later, not as a working size lever.
+
+    Example
+    -------
+    # comments indented under a '> only if ...' marker = used only when that other arg is active
+    behavior = masterData[anm]['behavior']              # one animal's behavior dict
+    drop_keys = ()                                      # () -> keep everything; or top-level keys to drop, e.g. ('raw',) -- see raw_days first
+    raw_days = [4]                                      #     > only if 'raw' not in drop_keys: None -> keep every day; [] -> keep none; or day indices to keep (others become None, so positional alignment holds)
+    keep_states = ('TrigTrialStart','SamplePeriod','DelayPeriod','ResponseCue','AnswerPeriod')  # None -> keep all Bpod states; or the state names to keep
+    keep_events = ('Port1In','Port2In')                 # None -> keep all Bpod events; or the event names to keep
+    keep_rawdata = ('OriginalStateData','OriginalStateTimestamps')  # None -> keep all RawData arrays; or the ones to keep
+    keep_trialsettings = ('Autowater',)                 # None -> keep TrialSettings untouched; or the GUI fields to keep
+    drop_mat_keys = ('SettingsFile',)                   # () -> keep every Bpod key; or top-level mat keys to drop
+    keep_mat_keys = None                                # None -> keep all mat keys except drop_mat_keys; or an explicit whitelist
+    float_dtype = 'float32'                             # None -> keep stored precision; or 'float32' | 'float16' to downcast floats
+    verbose = True                                      # True | False  (prints a before/after size report)
+    importlib.reload(js_manuscript_final)
+    behavior_reduced = js_manuscript_final.reduce_behavior_for_repo(
+        behavior, drop_keys=drop_keys, raw_days=raw_days, keep_states=keep_states, keep_events=keep_events, keep_rawdata=keep_rawdata, keep_trialsettings=keep_trialsettings, drop_mat_keys=drop_mat_keys, keep_mat_keys=keep_mat_keys, float_dtype=float_dtype, verbose=verbose)
+
+    Parameters
+    ----------
+    behavior : dict
+        One animal's behavior dict, i.e. masterData[anm]['behavior'].
+    drop_keys : tuple of str
+        Top-level behavior keys to drop entirely. Empty by default, so nothing is lost unless you ask.
+        Dropping 'raw' outright removes the key, so `anmData['raw'][dayIdx]` raises KeyError in
+        Fig1_behavior.ipynb -- prefer raw_days, which keeps that indexing working.
+    raw_days : list of int or None
+        Which behavior days keep their 'raw' payload. None (default) keeps every day. A list keeps only
+        those day indices and replaces the rest with None, so `raw` stays the same length as
+        `recorded_days` and `anmData['raw'][dayIdx]` still resolves for the days you kept. `[]` keeps
+        the key and its length but no payload. Ignored when 'raw' is in drop_keys or absent.
+    keep_states : tuple of str or None
+        Bpod state names kept inside RawEvents['Trial'][t]['States']. None keeps every state.
+    keep_events : tuple of str or None
+        Bpod event names kept inside RawEvents['Trial'][t]['Events']. None keeps every event.
+    keep_rawdata : tuple of str or None
+        RawData arrays kept. None keeps all six.
+    keep_trialsettings : tuple of str or None
+        Per-trial TrialSettings['GUI'] fields kept; each entry is rebuilt as {'GUI': {...}} so
+        mat['TrialSettings'][i]['GUI']['Autowater'] still resolves. None leaves TrialSettings untouched.
+    drop_mat_keys : tuple of str
+        Bpod 'mats' keys dropped outright. 'SettingsFile' is dropped by default -- nothing reads it.
+    keep_mat_keys : tuple of str or None
+        Explicit whitelist of Bpod keys. None keeps everything not named in drop_mat_keys.
+    float_dtype : str or None
+        dtype every float64 value is cast down to, through lists and object arrays. None leaves
+        precision alone. 'float32' is safe for the within-trial Bpod timestamps stored here, but
+        measured as a no-op on this dataset -- it is already float32 throughout.
+    verbose : bool
+        If True, print pickled size before and after with the percent saved.
+
+    Returns
+    -------
+    behavior_reduced : dict
+        A new behavior dict with the same layout as the input.
+
+    Local Dependencies
+    -------------------
+    js_manuscript_final._behavior_prune_mat
+        Prunes each behavior day's Bpod struct.
+    js_manuscript_final._behavior_cast_floats
+        Applies the list-aware float downcast.
+    js_manuscript_final._behavior_pkl_bytes
+        Measures the before/after sizes for the verbose report.
+    """
+    drop_keys     = tuple(drop_keys or ())
+    drop_mat_keys = tuple(drop_mat_keys or ())
+    size_before   = _behavior_pkl_bytes(behavior) if verbose else 0
+
+    behavior_reduced = {}
+    for key,value in behavior.items():
+        if key in drop_keys:
+            if verbose:
+                print(f"  - dropped '{key}' ({np.round(_behavior_pkl_bytes(value)/1e6,decimals=2)} MB)")
+            continue
+        if key == 'mats':
+            behavior_reduced[key] = [_behavior_prune_mat(mat,keep_states,keep_events,keep_rawdata,
+                                                         keep_trialsettings,drop_mat_keys,keep_mat_keys)
+                                     if isinstance(mat,dict) else copy.deepcopy(mat)
+                                     for mat in value]
+        elif key == 'raw' and raw_days is not None:
+            # Keep the listed days' tracking output and blank the rest to None. The list length is
+            # preserved on purpose: 'raw' is positionally aligned with recorded_days / mats / trajs, and
+            # Fig1_behavior.ipynb indexes it as anmData['raw'][dayIdx].
+            keepDays = {int(d) for d in raw_days}
+            behavior_reduced[key] = [copy.deepcopy(day) if d in keepDays else None
+                                     for d,day in enumerate(value)]
+            if verbose:
+                droppedDays = [d for d in range(len(value)) if d not in keepDays]
+                keptBytes = _behavior_pkl_bytes([value[d] for d in sorted(keepDays) if d < len(value)])
+                print(f"  - thinned 'raw' to day(s) {sorted(keepDays)} "
+                      f"({np.round(_behavior_pkl_bytes(value)/1e6,decimals=2)} MB -> "
+                      f"{np.round(keptBytes/1e6,decimals=2)} MB; days {droppedDays} set to None)")
+        else:
+            behavior_reduced[key] = copy.deepcopy(value)
+
+    behavior_reduced = _behavior_cast_floats(behavior_reduced,float_dtype)
+
+    if verbose:
+        size_after = _behavior_pkl_bytes(behavior_reduced)
+        pct = 100*(size_before-size_after)/size_before if size_before else 0
+        print(f"reduce_behavior_for_repo: {np.round(size_before/1e6,decimals=2)} MB -> "
+              f"{np.round(size_after/1e6,decimals=2)} MB ({np.round(pct,decimals=1)}% saved)")
+    return behavior_reduced
+##################################################################################################
+def save_behavior_split(savePath,saveName,behavior,split_days=True,extension='.pkl.gz',compresslevel=9,warn_MB=50,verbose=True):
+    """
+    Write one animal's behavior dict as a small metadata file plus one part file per behavior day, so a
+    behavior export that is too big to commit as a single '<anm>_behavior.pkl' fits in the repo. The
+    metadata file '<saveName>_meta<extension>' holds every day-invariant field (anmID, recorded_days,
+    shift_idx, twoCams, mouth, port_locs, cameraCal, shiftInfo, and anything else that is not a
+    day-indexed list) plus a '_split_index' listing every part file; the day-indexed keys ('mats',
+    'trajs', 'raw') are written to '<saveName>_day_<N><extension>', one file per behavior day, in the
+    same order as recorded_days. Compression follows the extension ('.pkl.gz' -> gzip, '.pkl.xz' ->
+    lzma, '.pkl.bz2' -> bz2, '.pkl' -> uncompressed). load_behavior_split reassembles the result into a
+    dict identical to the monolithic one, and masterData_loading picks the split set up automatically
+    whenever a '_meta' file is present.
+
+    Run reduce_behavior_for_repo first -- splitting alone fixes the per-file limit, pruning is what fixes
+    the total repo size.
+
+    Example
+    -------
+    # comments indented under a '> only if ...' marker = used only when that other arg is active
+    savePath = os.path.join(export_dir,anm,'behavior')  # existing directory to write the part files into
+    saveName = anm+"_behavior"         # base name; '_meta' / '_day_<N>' suffixes are appended
+    behavior = behavior_reduced        # the behavior dict to write, normally from reduce_behavior_for_repo
+    split_days = True                  # True | False -> False writes one '<saveName>_meta' + one '<saveName>_day_all' file
+    extension = '.pkl.gz'              # '.pkl.gz' (gzip) | '.pkl.xz' (lzma) | '.pkl.bz2' (bz2) | '.pkl' (uncompressed)
+    compresslevel = 9                  #     > only if extension is compressed: 1 (fast) .. 9 (smallest)
+    warn_MB = 50                       # None/<=0 -> off; or size in MB above which a written file is flagged as too big for the repo
+    verbose = True                     # True | False  (prints each file written and its size)
+    importlib.reload(js_manuscript_final)
+    savedFiles = js_manuscript_final.save_behavior_split(
+        savePath, saveName, behavior, split_days=split_days, extension=extension, compresslevel=compresslevel, warn_MB=warn_MB, verbose=verbose)
+
+    Parameters
+    ----------
+    savePath : str
+        Existing directory the metadata and part files are written to.
+    saveName : str
+        Base file name, normally '<anm>_behavior'. Any '.pkl'/'.p' extension (with or without a
+        compression suffix) is stripped before the suffixes are added.
+    behavior : dict
+        One animal's behavior dict, i.e. masterData[anm]['behavior'].
+    split_days : bool
+        If True, one part file per behavior day, so a later load can read a single day. If False, all
+        day-indexed keys go into one '_day_all' part file (still separate from the metadata).
+    extension : str
+        File extension for every written file; the compressor is inferred from it -- '.pkl.gz' gzip,
+        '.pkl.xz'/'.pkl.lzma' lzma, '.pkl.bz2' bz2, anything else uncompressed.
+    compresslevel : int
+        Compression level (gzip/bz2) or preset (lzma), 1 (fast) to 9 (smallest). Ignored for '.pkl'.
+    warn_MB : int or float or None
+        Print a warning for any written file at or above this size in MB. GitHub warns at 50 MB and
+        rejects at 100 MB. None or <= 0 turns the check off.
+    verbose : bool
+        If True, print each file as it is written with its size, plus a total at the end.
+
+    Returns
+    -------
+    savedFiles : list of str
+        Full paths of every file written, metadata file last.
+
+    Local Dependencies
+    -------------------
+    js_manuscript_final._align_open
+        Opens each part file with the compressor implied by extension.
+    """
+    import pickle
+
+    if not os.path.exists(savePath):
+        raise FileNotFoundError(f"save_behavior_split: savePath does not exist: {savePath}")
+
+    base = saveName
+    for suffix in ['.gz','.xz','.lzma','.bz2']:
+        if base.lower().endswith(suffix):
+            base = base[:-len(suffix)]
+    if base.lower().endswith('.pkl') or base.lower().endswith('.p'):
+        base = os.path.splitext(base)[0]
+
+    dayKeys = [key for key in _BEHAVIOR_DAY_KEYS if key in behavior]
+    dayLens = {key:len(behavior[key]) for key in dayKeys}
+    if len(set(dayLens.values())) > 1:
+        raise ValueError(f"save_behavior_split: day-indexed keys disagree on length {dayLens} -- they are "
+                         f"aligned by position, so splitting them would misalign the days")
+    nDays = list(dayLens.values())[0] if dayLens else 0
+    if 'recorded_days' in behavior and nDays and len(behavior['recorded_days']) != nDays:
+        print(f"<<WARNING>> save_behavior_split: len(recorded_days)={len(behavior['recorded_days'])} but the "
+              f"day-indexed keys have {nDays} entries; writing anyway, but check the export")
+
+    savedFiles = []
+    def _write(obj,fileName):
+        full_path = os.path.join(savePath,fileName)
+        with _align_open(full_path,'wb',extension,compresslevel=compresslevel) as f:
+            pickle.dump(obj,f,protocol=pickle.HIGHEST_PROTOCOL)
+        savedFiles.append(full_path)
+        fileSize_MB = os.path.getsize(full_path)/1e6
+        if verbose:
+            print(f"  + wrote {fileName}  ({np.round(fileSize_MB,decimals=2)} MB)")
+        if warn_MB and fileSize_MB >= warn_MB:
+            print(f"<<WARNING>> {fileName} is {np.round(fileSize_MB,decimals=2)} MB -- GitHub warns at 50 MB "
+                  f"and rejects at 100 MB; try a tighter reduce_behavior_for_repo (drop_keys, keep_states, "
+                  f"keep_rawdata), float_dtype='float32', or extension='.pkl.xz'")
+        return fileSize_MB
+
+    if verbose:
+        print(f"save_behavior_split: savePath={savePath!r} saveName={base!r} split_days={split_days} "
+              f"nDays={nDays} dayKeys={dayKeys} extension={extension!r} compresslevel={compresslevel}")
+
+    split_index = {'saveName':base,'extension':extension,'split_days':bool(split_days),
+                   'day_keys':dayKeys,'n_days':nDays,'key_order':list(behavior.keys()),'files':[]}
+    total_MB = 0.0
+    if split_days:
+        for day in range(nDays):
+            payload = {key:behavior[key][day] for key in dayKeys}
+            fileName = f"{base}_day_{day}{extension}"
+            total_MB += _write(payload,fileName)
+            split_index['files'].append({'day':day,'file':fileName})
+    elif dayKeys:
+        payload = {key:behavior[key] for key in dayKeys}
+        fileName = f"{base}_day_all{extension}"
+        total_MB += _write(payload,fileName)
+        split_index['files'].append({'day':None,'file':fileName})
+
+    meta = {key:copy.deepcopy(value) for key,value in behavior.items() if key not in dayKeys}
+    meta['_split_index'] = split_index
+    total_MB += _write(meta,f"{base}_meta{extension}")
+
+    if verbose:
+        print(f"  Finished! {len(savedFiles)} files, {np.round(total_MB,decimals=2)} MB total")
+    return savedFiles
+##################################################################################################
+def find_behavior_split_extension(savePath,saveName,extensions=('.pkl.gz','.pkl.xz','.pkl.lzma','.pkl.bz2','.pkl'),verbose=False):
+    """
+    Detect whether a directory holds a split behavior export and, if so, which extension it was written
+    with, by looking for a '<saveName>_meta<extension>' file. Returns None when there is no metadata file,
+    which is the signal to fall back to the monolithic '<saveName>.pkl'. masterData_loading calls this so
+    the same DATA_DIR works whether behavior was exported split or whole.
+
+    Example
+    -------
+    savePath = os.path.join(DATA_DIR,anm,'behavior')  # directory that may hold the '_meta' and '_day_<N>' files
+    saveName = anm+"_behavior"         # base name passed to save_behavior_split
+    extensions = ('.pkl.gz','.pkl.xz','.pkl.lzma','.pkl.bz2','.pkl')  # extensions to try, in order
+    verbose = False                    # True | False  (prints which metadata file matched)
+    importlib.reload(js_manuscript_final)
+    behExt = js_manuscript_final.find_behavior_split_extension(
+        savePath, saveName, extensions=extensions, verbose=verbose)
+
+    Parameters
+    ----------
+    savePath : str
+        Directory to look in.
+    saveName : str
+        Base file name used when saving, normally '<anm>_behavior'.
+    extensions : tuple of str
+        Extensions to test, in priority order.
+    verbose : bool
+        If True, print the metadata file that matched, or that none did.
+
+    Returns
+    -------
+    behExt : str or None
+        The matching extension, or None when no metadata file exists.
+    """
+    for extension in extensions:
+        if os.path.exists(os.path.join(savePath,f"{saveName}_meta{extension}")):
+            if verbose:
+                print(f"find_behavior_split_extension: found {saveName}_meta{extension}")
+            return extension
+    if verbose:
+        print(f"find_behavior_split_extension: no '_meta' file in {savePath} for {saveName!r}")
+    return None
+##################################################################################################
+def load_behavior_split(savePath,saveName,days=None,extension='.pkl.gz',verbose=True):
+    """
+    Rebuild one animal's behavior dict from the metadata + per-day part files written by
+    save_behavior_split. The metadata file '<saveName>_meta<extension>' is always read (it carries every
+    day-invariant field plus the '_split_index' listing the part files); only the days you ask for are
+    then read off disk and stitched back into the day-indexed lists, so a notebook that needs one
+    behavior day never reads the rest. With days=None the result is identical to the monolithic
+    '<anm>_behavior.pkl' and can be dropped straight into masterData[anm]['behavior'].
+
+    Note that a days filter makes the day-indexed lists ('mats', 'trajs', 'raw') shorter than
+    'recorded_days', which breaks the positional alignment the analysis code assumes -- use it for
+    inspecting one day, not for feeding get_tracker.
+
+    Example
+    -------
+    # comments indented under a '> only if ...' marker = used only when that other arg is active
+    savePath = os.path.join(DATA_DIR,anm,'behavior')  # directory holding the '_meta' and '_day_<N>' files
+    saveName = anm+"_behavior"         # same base name passed to save_behavior_split
+    days = None                        # None -> every day, positionally aligned with recorded_days; or list of day indices, e.g. [0,1]
+    extension = '.pkl.gz'              # '.pkl.gz' | '.pkl.xz' | '.pkl.bz2' | '.pkl'  (extension used when the files were written)
+    verbose = True                     # True | False  (prints each part file loaded)
+    importlib.reload(js_manuscript_final)
+    behavior = js_manuscript_final.load_behavior_split(
+        savePath, saveName, days=days, extension=extension, verbose=verbose)
+
+    Parameters
+    ----------
+    savePath : str
+        Directory holding the metadata and part files.
+    saveName : str
+        Base file name used when saving. Any '.pkl'/'.p' extension (with or without a compression
+        suffix) is stripped.
+    days : list of int or None
+        Behavior day indices to load. None loads every day that was written.
+    extension : str
+        Extension the files were written with; the decompressor is inferred from it.
+    verbose : bool
+        If True, print each part file as it is loaded.
+
+    Returns
+    -------
+    behavior : dict
+        The reassembled behavior dict, laid out exactly like masterData[anm]['behavior'].
+
+    Local Dependencies
+    -------------------
+    js_manuscript_final._align_open
+        Opens each part file with the decompressor implied by extension.
+    """
+    import pickle
+
+    base = saveName
+    for suffix in ['.gz','.xz','.lzma','.bz2']:
+        if base.lower().endswith(suffix):
+            base = base[:-len(suffix)]
+    if base.lower().endswith('.pkl') or base.lower().endswith('.p'):
+        base = os.path.splitext(base)[0]
+
+    meta_path = os.path.join(savePath,f"{base}_meta{extension}")
+    if not os.path.exists(meta_path):
+        raise FileNotFoundError(f"load_behavior_split: no metadata file at {meta_path}")
+    with _align_open(meta_path,'rb',extension) as f:
+        meta = pickle.load(f)
+    split_index = meta.pop('_split_index',{'day_keys':list(_BEHAVIOR_DAY_KEYS),'files':[],'split_days':True})
+    dayKeys = split_index.get('day_keys',list(_BEHAVIOR_DAY_KEYS))
+    if verbose:
+        print(f"load_behavior_split: read {base}_meta{extension} "
+              f"({split_index.get('n_days','?')} days, day_keys={dayKeys})")
+
+    behavior = meta
+    for key in dayKeys:
+        behavior[key] = []
+
+    wanted = None if days is None else [int(d) for d in days]
+    for entry in split_index.get('files',[]):
+        if wanted is not None and entry.get('day') is not None and entry['day'] not in wanted:
+            continue
+        part_path = os.path.join(savePath,entry['file'])
+        if not os.path.exists(part_path):
+            print(f"<<WARNING>> load_behavior_split: FILE DOESNT EXIST {part_path} -- skipping day {entry.get('day')}")
+            continue
+        with _align_open(part_path,'rb',extension) as f:
+            payload = pickle.load(f)
+        if verbose:
+            print(f"  + loaded {entry['file']}")
+        for key in dayKeys:
+            if key not in payload:
+                continue
+            if entry.get('day') is None:      # written with split_days=False: payload holds whole lists
+                behavior[key].extend(list(payload[key]))
+            else:
+                behavior[key].append(payload[key])
+
+    for key in dayKeys:
+        if not behavior[key]:
+            del behavior[key]
+
+    # Rebuild in the key order the dict had when it was saved -- the day-indexed keys are filled in last
+    # above, so without this they would all end up bunched at the end of the dict.
+    key_order = split_index.get('key_order')
+    if key_order:
+        behavior = {**{key:behavior[key] for key in key_order if key in behavior},
+                    **{key:behavior[key] for key in behavior if key not in key_order}}
+    return behavior
 ##################################################################################################
 def load_ROI_clustering_reduced_split(savePath,saveName,ROI_type_keys=None,ROI_scores=None,big_keys=None,clusterList=None,trialGroupings=None,extension='.pkl',verbose=True):
     """
@@ -938,250 +1591,6 @@ def load_all_grouped_aligned_traces_split(savePath,saveName,groups=None,align_da
     return all_grouped_aligned_traces,cueInfo,summaryInfo
 
 ##################################################################################################    
-def summary_stats(tempData,nBins=100,binWidth=0,temp_minVal=np.nan,temp_maxVal=np.nan,\
-    calcHist=True,verbose=False, allow_overages = False, splitZeroBin = False, \
-    calc_hist_log10 = True, calc_cumulative_hist = True, calc_norm_hist = True, calc_cumulative_freq = True, calc_pdf = True, 
-    save_input = False, force_dType=False, dType='float32', exclude_NaNs = True, ddof = 0, warningsOn = True):
-    """
-    Calculate summary statistics for the provided data.
-
-    Parameters:
-    tempData: input data to analyze
-    nBins: number of bins for histogram
-    binWidth: width of each bin for histogram
-    temp_minVal: minimum value for histogram
-    temp_maxVal: maximum value for histogram
-    calcHist: if True, calculate histogram and related statistics
-    verbose: if True, print additional information
-    allow_overages: if True, allow values greater than the histogram limits
-    splitZeroBin: if True, split the zero bin in the histogram
-    calc_hist_log10: if True, calculate logarithmic histogram
-    calc_cumulative_hist: if True, calculate cumulative histogram
-    calc_norm_hist: if True, calculate normalized histogram
-    calc_cumulative_freq: if True, calculate cumulative frequency
-    calc_pdf: if True, calculate probability density function
-    save_input: if True, save the input data in the stats dictionary
-    force_dType: if True, force the data to a specific data type
-    dType: data type to force the data to
-    exclude_NaNs: if True, exclude NaN values from the calculations
-    warningsOn: if True, print warnings
-
-    Returns:
-    stats: a dictionary containing the calculated statistics
-    """
-
-    stats={}
-    tempData = np.array(tempData)
-    tempData=tempData.flatten()
-    if len(tempData) == 0:
-        if warningsOn:
-            print("<<WARNING>> No data to analyze")
-        stats['success'] = False
-        stats['n'] = np.nan
-        stats['mean'] = np.nan
-        stats['gmean'] = np.nan
-        stats['max'] = np.nan
-        stats['min'] = np.nan
-        stats['med'] = np.nan
-        stats['std'] = np.nan
-        stats['sem'] = np.nan
-        stats['cv'] = np.nan
-        stats['sum'] = np.nan
-        stats['mode']=np.nan
-        stats['q1']=np.nan
-        stats['q3']=np.nan
-        stats['iqr']=np.nan
-        stats['np_skew']=np.nan
-        stats['fmc_skew']=np.nan
-    else:
-        if force_dType:
-            try:
-                tempData = np.array(tempData).astype(dType)
-            except:
-                pass
-        ##################
-        #Basic Stats
-        if save_input:
-            stats['data'] = copy.deepcopy(tempData)
-        stats['success'] = False
-        if exclude_NaNs:
-            stats['n']=sum(~np.isnan(tempData))
-            stats['mean']=np.nanmean(tempData)
-            stats['max']=np.nanmax(tempData)
-            stats['min']=np.nanmin(tempData)
-            try:
-                stats['minPos']=np.nanmin(tempData[tempData>0])
-            except:
-                stats['minPos']=np.nan
-            stats['med']=np.nanmedian(tempData,axis=0)
-            stats['std']=np.nanstd(tempData,ddof=ddof)
-            stats['sum']=np.nansum(tempData)
-            try:
-                stats['q1']=np.nanpercentile(tempData,25)
-                stats['q3']=np.nanpercentile(tempData,75)
-            except:
-                stats['q1']=np.nan
-                stats['q3']=np.nan
-            # stats['mode']=mode(tempData, nan_policy='omit')
-            stats['gmean']=gmean(tempData[np.isfinite(tempData)])
-
-        else:
-            stats['n']=sum(tempData)
-            stats['mean']=np.mean(tempData)
-            stats['max']=np.max(tempData)
-            stats['min']=np.min(tempData)
-            try:
-                stats['minPos']=np.min(tempData[tempData>0])
-            except:
-                stats['minPos']=np.nan
-            stats['med']=np.median(tempData,axis=0)
-            stats['std']=np.std(tempData,ddof=ddof)
-            stats['sum']=np.sum(tempData)
-            stats['mode']=mode(tempData)
-            try:
-                stats['q1']=np.percentile(tempData,25)
-                stats['q3']=np.percentile(tempData,75)
-            except:
-                stats['q1']=np.nan
-                stats['q3']=np.nan
-            # stats['mode']=mode(tempData, nan_policy='propogate')
-            stats['gmean']=gmean(tempData)
-        try:
-            stats['iqr']=stats['q3']-stats['q1']
-        except:
-            stats['iqr']=np.nan
-        try:
-            stats['sem']=stats['std']/np.sqrt(stats['n'])
-        except:
-            stats['sem']=np.nan
-        try:
-            stats['cv']=stats['std']/stats['mean']
-        except:
-            stats['cv']=np.nan
-        try:
-            stats['np_skew']=(stats['mean']-stats['med'])/stats['std'] # nonparametric skew
-        except:
-            stats['np_skew']=np.nan
-        try:
-            if exclude_NaNs:
-                stats['fmc_skew']=float(skew(tempData, axis=0, bias=True, nan_policy='omit')) #Fisher's moment coefficient of skewness
-            else:
-                stats['fmc_skew']=float(skew(tempData, axis=0, bias=True, nan_policy='propogate')) #Fisher's moment coefficient of skewness
-
-        except:
-            stats['fmc_skew'] = np.nan
-        ##################
-        if calcHist:
-            stats['binWidth']=binWidth
-            stats['minVal']=temp_minVal
-            stats['maxVal']=temp_maxVal
-            stats['nBins']=nBins
-            try:
-                # try:
-                if nBins and ('float' in str(type(stats['minVal'])) or 'int' in str(type(stats['minVal']))) and \
-                    ('float' in str(type(stats['maxVal'])) or 'int' in str(type(stats['maxVal']))):
-                    binEdges=np.linspace(stats['minVal'], stats['maxVal'], nBins)
-                elif binWidth>0 and ('float' in str(type(stats['minVal'])) or 'int' in str(type(stats['minVal']))) and \
-                    ('float' in str(type(stats['maxVal'])) or 'int' in str(type(stats['maxVal']))):
-                    binEdges=np.arange(stats['minVal'], stats['maxVal'], binWidth)
-                elif nBins:
-                    if exclude_NaNs:
-                        stats['minVal'] = np.floor(np.nanmin(tempData)*(1/binWidth))/(1/binWidth)
-                        stats['maxVal'] = np.ceil(np.nanmax(tempData)*(1/binWidth))/(1/binWidth)
-                        binEdges=np.linspace(stats['minVal'], stats['maxVal'], nBins)
-                    else:
-                        stats['minVal'] = np.floor(np.min(tempData)*(1/binWidth))/(1/binWidth)
-                        stats['maxVal'] = np.ceil(np.max(tempData)*(1/binWidth))/(1/binWidth)
-                        binEdges=np.linspace(stats['minVal'], stats['maxVal'], nBins)
-                elif binWidth>0:
-                    if exclude_NaNs:
-                        stats['minVal'] = np.floor(np.nanmin(tempData)*(1/binWidth))/(1/binWidth)
-                        stats['maxVal'] = np.ceil(np.nanmax(tempData)*(1/binWidth))/(1/binWidth)
-                        binEdges=np.arange(stats['minVal'], stats['maxVal'], binWidth)
-                    else:
-                        stats['minVal'] = np.floor(np.min(tempData)*(1/binWidth))/(1/binWidth)
-                        stats['maxVal'] = np.ceil(np.max(tempData)*(1/binWidth))/(1/binWidth)
-                        binEdges=np.arange(stats['minVal'], stats['maxVal'], binWidth)
-                binCenters=binEdges[0:len(binEdges)-1]+(binEdges[1]-binEdges[0])/2
-                zeroMin = False
-                if exclude_NaNs:
-                    if np.nanmin(tempData) == 0 and splitZeroBin:
-                        zeroMin = True
-                else:
-                    if np.min(tempData) == 0 and splitZeroBin:
-                        zeroMin = True
-                if zeroMin:
-                    if verbose:
-                        print("NOTE: adding true zero bin")
-                    binEdges[0] = 0.0000001
-                    binEdges = np.insert(binEdges,0,0)
-                    binCenters = np.insert(binCenters,0,0)
-
-                hist,BinCenters=np.histogram(tempData,bins=binEdges)
-                # except:
-                #     hist,BinCenters=np.histogram(tempData)
-                if allow_overages and np.any(tempData>binEdges[-1]):
-                    stats['overage'] = True
-                    if verbose:
-                        print("NOTE: adding an extra bin for values greater than the limits")
-                    overage = np.sum(tempData>binEdges[-1])
-                    hist = np.append(hist,overage)
-                    binCenters = np.append(binCenters,binCenters[-1]+(binCenters[-1]-binCenters[-3]))
-                    if exclude_NaNs:
-                        binEdges = np.append(binEdges,np.nanmax(tempData))
-                    else:
-                        binEdges = np.append(binEdges,np.max(tempData))
-
-                hist_log10 = copy.deepcopy(hist)
-                # hist_log10[hist_log10<1] = 0.1
-                hist_log10 = np.log10(hist_log10)
-                hist_log10[np.isinf(hist_log10)] = 0
-                norm_hist=hist/np.nanmax(hist)
-                cumulative_hist=np.cumsum(hist)
-                pdf = hist/stats['n']
-                if np.nanmax(cumulative_hist) == np.nan:
-                    cumulative_freq=cumulative_hist
-                else:
-                    cumulative_freq=cumulative_hist/np.nanmax(cumulative_hist)
-                stats['binEdges']=binEdges.astype('float32')
-                stats['binCenters']=binCenters.astype('float32')
-                stats['hist']=hist.astype('int32')
-                if calc_hist_log10:
-                    stats['hist_log10']=hist_log10.astype('float32')
-                if calc_cumulative_hist:
-                    stats['cumulative_hist']=cumulative_hist.astype('float32')
-                if calc_norm_hist:
-                    stats['norm_hist']=norm_hist.astype('float32')
-                if calc_cumulative_freq:
-                    stats['cumulative_freq']=cumulative_freq.astype('float32')
-                if calc_pdf:
-                    stats['pdf']=pdf.astype('float32')
-                stats['success'] = True
-                if not stats['nBins']:
-                    stats['nBins'] = len(hist)
-            except:
-                if warningsOn:
-                    print("<<WARNING>> Unable to calculate histograms...")
-                # stats['hist'] = [np.nan]
-                # stats['cumulative_hist'] = [np.nan]
-                # stats['norm_hist'] = [np.nan]
-                # stats['cumulative_freq'] = [np.nan]
-        else:
-            if verbose:
-                print("Skipping Histograms")
-    ##################
-    if verbose:
-        print("n    = "+str(stats['n']))
-        print("mean = "+str(stats['mean']))
-        print("max  = "+str(stats['max']))
-        print("min  = "+str(stats['min']))
-        print("med  = "+str(stats['med']))
-        print("std  = "+str(stats['std']))
-        print("sem  = "+str(stats['sem']))
-        print("cv   = "+str(stats['cv']))
-        print("sum  = "+str(stats['sum']))
-    return stats
-##################################################################################################
 
 def generate_default_flagParams(maskKey = 'consensus_NMFtc_mask'):
     flagParams = {}
@@ -2639,33 +3048,6 @@ def get_relDistFromLDA(azi, ele, lda):
 
     return dists
 
-def clean_subplots(nrows,ncols,figsize,facecolor='none',constrained_layout = False, sharey = False, sharex = False):
-    if figsize:
-        fig,ax = plt.subplots(nrows,ncols,figsize=figsize, sharey = sharey, sharex = sharex)
-    else:
-        fig,ax = plt.subplots(nrows,ncols, sharey = sharey, sharex = sharex)
-    if hasattr(ax, 'shape'):
-        if len(ax.shape)>1:
-            for row in range(ax.shape[0]):
-                for col in range(ax.shape[1]):
-                    ax[row,col].set_facecolor(facecolor)
-                    if facecolor=='none':
-                        ax[row,col].patch.set_alpha(0.0) # Axes background
-        else:
-            for row in range(ax.shape[0]):
-                ax[row].set_facecolor(facecolor)
-                if facecolor=='none':
-                    ax[row].patch.set_alpha(0.0) # Axes background
-    else:
-        ax.set_facecolor(facecolor)
-        if facecolor=='none':
-            ax.patch.set_alpha(0.0) # Axes background
-    if constrained_layout:
-        fig.set_constrained_layout(True)
-    fig.set_facecolor(facecolor)
-    if facecolor=='none':
-        fig.patch.set_alpha(0.0) # Figure background
-    return fig,ax
 
 def get_go_contact_irf(data,ctf):
     from scipy.linalg import toeplitz
@@ -15427,4 +15809,38 @@ def draw_crop_box(ax, crop_coords, lw=1, ls=':', color=(1,1,1), alpha=1, mode=2,
             rect.set_dashes(dashes)
         ax.add_patch(rect)
     return ax
-
+################################################################################
+# Load everything saved above and reconstruct the exact variables image_and_trace_movie_preview() needs,
+# without re-running the rest of the notebook (no summaryInfo/data/imageData imports required). The
+# trimmed trace arrays and imageData frames saved above only ever recorded the cells/frames that were
+# actually read/rendered; here each one is scattered back into an empty full-shape array at those same
+# positions so data[anat]['sessions'][sess][key][ROI, importFrs] and imageData[ch]['data'][f,:,:] index
+# correctly again inside collect_plot_traces() / image_and_trace_movie_preview().
+################################################################################
+def resolve(entry,paramsDir):
+    import pickle, os
+    if isinstance(entry,dict) and set(entry.keys())=={'__file__'}:
+        with open(os.path.join(paramsDir,entry['__file__']),'rb') as f:
+            return pickle.load(f)
+    return entry
+################################################################################
+def restore_trace(entry):
+    fillVal = np.nan if np.issubdtype(entry['dtype'],np.floating) else 0
+    fullArr = np.full(entry['shape'],fillVal,dtype=entry['dtype'])
+    fullArr[np.ix_(entry['ROIs'],entry['importFrs'])] = entry['trimmed']
+    return fullArr
+################################################################################
+def restore_licks(entry):
+    dtype0,dtype1 = entry['trimmed'][0].dtype,entry['trimmed'][1].dtype
+    fill0 = np.nan if np.issubdtype(dtype0,np.floating) else 0
+    fill1 = np.nan if np.issubdtype(dtype1,np.floating) else 0
+    licks_full = [np.full(entry['nFrames_total'],fill0,dtype=dtype0),np.full(entry['nFrames_total'],fill1,dtype=dtype1)]
+    licks_full[0][entry['importFrs']] = entry['trimmed'][0]
+    licks_full[1][entry['importFrs']] = entry['trimmed'][1]
+    return licks_full
+################################################################################
+def restore_image_frames(entry):
+    fullArr = np.full(entry['shape'],np.nan,dtype=entry['dtype'])
+    fullArr[entry['frameIdxs'],:,:] = entry['trimmed']
+    return fullArr
+################################################################################

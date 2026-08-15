@@ -1,6 +1,7 @@
 # Scheib_2026
 
-Code and data repository for the Scheib et al., 2026 manuscript (Kerlin Lab).
+Code and data repository for the Scheib et al., 2026 manuscript in eLife from
+the Kerlin Lab at the University of Minnesota, Twin Cities.
 
 The repository contains the per-animal behavioral and two-photon calcium-imaging data used in the
 study, the pre-computed trace alignments and example-ROI exports the figures are built from, and the
@@ -8,6 +9,16 @@ six Jupyter notebooks (plus one shared Python library) that generate every manus
 
 The notebooks are **self-contained**: they import only `js_manuscript_final.py` and standard
 scientific-Python packages. No lab-internal packages are required.
+
+SLeD refers to the lab specific environment (Synapses Learning and Dendrites) however most of required
+tools should be available in the single package file.
+
+NOTE: preparation of this readme was performed with assistance from Claude claude-opus-5 however most
+of the actual code was written by Zachary Newman, Jackson Scheib and Aaron Kerlin with minimal AI
+assistance.
+
+Please send any questions to newmanza@umn.edu.
+
 
 ---
 
@@ -275,7 +286,46 @@ Installing NumPy ≥ 2 changes pickle module paths and defeats this shim.
 
 ## Citation
 
-Scheib et al., 2026. (Full citation to be added on publication.)
+[Scheib et al., 2026 Distinct sensorimotor encoding in tuft dendrites and somata associated with action, correction, and learning. eLife](https://elifesciences.org/reviewed-preprints/111876)
+
+
+====================================================================================================
+## Raw data inventory
+
+Due to the large size of the raw data files they are not included here in the repo but here is a summary of all files that are available upon special request
+
+22 animals, 167 imaging sessions (somas / dendrites) over 167 recording days, 336 raw directories, **147,203 files**, **20.07 TB** (20,073,459,670,400 bytes).
+
+Indexed 2026-08-14 17:30:19 from the raw paths recorded in `summaryInfo` (`imagingRawPath` / `behaviorRawPath` per session). 
+Sessions are counted per compartment; where a directory is shared by two sessions (a behavior day recorded for both compartments) 
+it is counted once in the animal and total rows, so the per-session rows can sum higher.
+
+| Animal | Sessions | Imaging files | Imaging size | Behavior files | Behavior size | Total files | Total size |
+|---|---|---|---|---|---|---|---|
+| `B00002121749` | 5 | 1,347 | 70.31 GB | 2,707 | 242.23 GB | 4,054 | 312.54 GB |
+| `B00002121774` | 9 | 2,934 | 705.04 GB | 5,339 | 467.68 GB | 8,273 | 1.17 TB |
+| `B00002121777` | 10 | 3,039 | 826.72 GB | 6,489 | 580.75 GB | 9,528 | 1.41 TB |
+| `B00002213772` | 11 | 3,384 | 698.98 GB | 6,795 | 608.72 GB | 10,179 | 1.31 TB |
+| `B00002213773` | 3 | 1,015 | 259.06 GB | 2,039 | 182.8 GB | 3,054 | 441.86 GB |
+| `B00002213784` | 9 | 2,586 | 532.05 GB | 4,914 | 435.38 GB | 7,500 | 967.44 GB |
+| `B00002213785` | 9 | 2,336 | 505.5 GB | 4,419 | 390.52 GB | 6,755 | 896.02 GB |
+| `B00002213889` | 7 | 1,913 | 325.4 GB | 3,843 | 343.92 GB | 5,756 | 669.32 GB |
+| `B00002213908` | 9 | 2,753 | 517.28 GB | 5,531 | 495.47 GB | 8,284 | 1.01 TB |
+| `B00002213909` | 5 | 1,569 | 364.17 GB | 3,149 | 282.14 GB | 4,718 | 646.31 GB |
+| `B00002213920` | 8 | 2,298 | 418.65 GB | 4,614 | 413.07 GB | 6,912 | 831.72 GB |
+| `B00002213921` | 6 | 1,697 | 357.19 GB | 3,413 | 305.43 GB | 5,110 | 662.61 GB |
+| `B00002213932` | 8 | 2,534 | 598.81 GB | 5,088 | 455.87 GB | 7,622 | 1.05 TB |
+| `B00002213943` | 7 | 1,840 | 406.54 GB | 3,103 | 279.47 GB | 4,943 | 686.01 GB |
+| `B00002213944` | 2 | 571 | 216.52 GB | 1,139 | 102.72 GB | 1,710 | 319.24 GB |
+| `B00002213970` | 10 | 2,805 | 944.15 GB | 5,589 | 503.51 GB | 8,394 | 1.45 TB |
+| `B00002213982` | 8 | 2,488 | 530.44 GB | 4,958 | 446.82 GB | 7,446 | 977.26 GB |
+| `B00002213985` | 7 | 2,229 | 465.53 GB | 4,445 | 400.6 GB | 6,674 | 866.14 GB |
+| `B00002213997` | 9 | 2,845 | 750.6 GB | 5,681 | 511.99 GB | 8,526 | 1.26 TB |
+| `B00002213998` | 7 | 1,759 | 684.3 GB | 3,509 | 316.11 GB | 5,268 | 1.0 TB |
+| `B00002213999` | 9 | 2,833 | 606.59 GB | 5,653 | 509.47 GB | 8,486 | 1.12 TB |
+| `B00002214001` | 9 | 2,710 | 546.22 GB | 5,301 | 468.73 GB | 8,011 | 1.01 TB |
+| **All animals** | **167** | **49,485** | **11.33 TB** | **97,718** | **8.74 TB** | **147,203** | **20.07 TB** |
+
 
 ## License
 

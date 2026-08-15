@@ -69,9 +69,9 @@ jupyter-core==5.8.1
 # Not imported by any committed notebook or at js_manuscript_final.py module
 # level; uncomment only if you call the corresponding helper directly.
 #
-# opencv-python==4.5.5.64   # jsm.readFrames() -- uses cv2, never imported
-# joblib==1.1.0             # jsm.run_parallel_bootstrap() -- uses Parallel/delayed,
-#                           # never imported. jsm.vectorized_bootstrap() is the
-#                           # numpy-only equivalent the notebooks actually use.
-# ipynbname==2021.3.2       # only for the commented-out auto-PARENT_DIR block
-#                           # in each notebook's init cell.
+opencv-python==4.5.5.64   # jsm.readFrames() -- uses cv2, never imported
+joblib==1.1.0             # jsm.run_parallel_bootstrap() -- uses Parallel/delayed,
+                          # never imported. jsm.vectorized_bootstrap() is the
+                          # numpy-only equivalent the notebooks actually use.
+ipynbname==2021.3.2       # only for the commented-out auto-PARENT_DIR block
+                          # in each notebook's init cell.
