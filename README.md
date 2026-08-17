@@ -12,6 +12,12 @@ scientific-Python packages. No lab-internal packages are required.
 
 ---
 
+## Citation
+
+[Scheib et al., 2026 Distinct sensorimotor encoding in tuft dendrites and somata associated with action, correction, and learning. eLife](https://elifesciences.org/reviewed-preprints/111876)
+
+---
+
 ## Repository structure
 
 ```
@@ -329,11 +335,6 @@ Installing NumPy ≥ 2 changes pickle module paths and defeats this shim.
   directory already exists.
 
 ---
-
-## Citation
-
-[Scheib et al., 2026 Distinct sensorimotor encoding in tuft dendrites and somata associated with action, correction, and learning. eLife](https://elifesciences.org/reviewed-preprints/111876)
-
 
 ====================================================================================================
 ## Raw data inventory
