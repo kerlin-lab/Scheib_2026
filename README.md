@@ -10,16 +10,6 @@ six Jupyter notebooks (plus one shared Python library) that generate every manus
 The notebooks are **self-contained**: they import only `js_manuscript_final.py` and standard
 scientific-Python packages. No lab-internal packages are required.
 
-SLeD refers to the lab specific environment (Synapses Learning and Dendrites) however most of required
-tools should be available in the single package file.
-
-NOTE: preparation of this readme was performed with assistance from Claude claude-opus-5 however most
-of the actual code was written by Zachary Newman, Jackson Scheib and Aaron Kerlin with minimal AI
-assistance.
-
-Please send any questions to newmanza@umn.edu.
-
-
 ---
 
 ## Repository structure
@@ -382,6 +372,16 @@ it is counted once in the animal and total rows, so the per-session rows can sum
 | `B00002214001` | 9 | 2,710 | 546.22 GB | 5,301 | 468.73 GB | 8,011 | 1.01 TB |
 | **All animals** | **167** | **49,485** | **11.33 TB** | **97,718** | **8.74 TB** | **147,203** | **20.07 TB** |
 
+
+## NOTES:
+SLeD refers to the lab specific environment (Synapses Learning and Dendrites) however most of required
+tools should be available in the single package file.
+
+The preparation of this readme was performed with assistance from Claude claude-opus-5 however most
+of the actual code was written by Zachary Newman, Jackson Scheib and Aaron Kerlin with minimal AI
+assistance.
+
+Please send any questions to newmanza@umn.edu.
 
 ## License
 
