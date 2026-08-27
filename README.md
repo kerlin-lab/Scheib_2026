@@ -10,11 +10,20 @@ six Jupyter notebooks (plus one shared Python library) that generate every manus
 The notebooks are **self-contained**: they import only `js_manuscript_final.py` and standard
 scientific-Python packages. No lab-internal packages are required.
 
+**Companion raw-data repository:** the true raw and motion-registered two-photon imaging data behind
+the two Fig2 example ROIs (one dendrite, one soma) are published separately at
+**[kerlinlab/Scheib_2026_data](https://github.com/kerlinlab/Scheib_2026_data)** (Git LFS). Nothing in
+this repository needs it — `Fig2.ipynb` runs off the trimmed exports in `Data/examples/` — but it is
+there if you want the full movies rather than the frames the panels draw.
+
 ---
 
 ## Citation
 
 [Scheib et al., 2026 Distinct sensorimotor encoding in tuft dendrites and somata associated with action, correction, and learning. eLife](https://elifesciences.org/reviewed-preprints/111876)
+
+Raw data for the Fig2 examples is archived separately:
+[kerlinlab/Scheib_2026_data](https://github.com/kerlinlab/Scheib_2026_data).
 
 ---
 
@@ -257,7 +266,7 @@ third-party imports are `numpy`, `scipy`, `matplotlib`, `seaborn`, `statsmodels`
 | Notebook | Cells | Data it loads | Description |
 |---|---|---|---|
 | `Fig1.ipynb` | 38 | full `masterData` + `examples/fig1_behav_examples/` | Licking behavior. Session/trial count stats, example camera frames with the lick-angle construction, 3D lick projections and the LDA left/right boundary, per-animal lick-angle distributions, motor-error rate (MER) and directional-error rate (DER) across the sensorimotor shift. |
-| `Fig2.ipynb` | 5 | `examples/fig2_indiv_examples/` | Reconstructs two example ROIs (one dendrite, one soma) from the trimmed exports and re-renders `image_and_trace_movie_preview()` frames — imaging field of view with ROI overlays alongside the simultaneous traces. Does not load `masterData`. |
+| `Fig2.ipynb` | 5 | `examples/fig2_indiv_examples/` | Reconstructs two example ROIs (one dendrite, one soma) from the trimmed exports and re-renders `image_and_trace_movie_preview()` frames — imaging field of view with ROI overlays alongside the simultaneous traces. Does not load `masterData`. The raw and registered source data for both example sessions (`B00002213784`, 230123 dendrites and 230124 somas) is in the companion [Scheib_2026_data](https://github.com/kerlinlab/Scheib_2026_data) repo. |
 | `Fig3.ipynb` | 18 | `traceAlignments/fig3/`, `traceAlignments/fig3_licking/`, `examples/fig3_indiv_examples/` | Example-ROI NMF footprints, trial-aligned activity rasters by cluster, and the matching lick rasters. Does not load `masterData`. |
 | `Fig4.ipynb` | 47 | full `masterData` + `examples/fig4_indiv_examples/` | Modeled responses; go-cue vs. lick-contact impulse response functions per ROI; SMO (Sensory / Motor-Choice / Outcome-Reward) coding-direction preparation, cross-validated calculation, projections, selectivity and correlations. **Uses a Dask `LocalCluster`** for the heavy SMO passes. |
 | `Fig5.ipynb` | 54 | full `masterData` + `examples/fig5_indiv_examples/` + `traceAlignments/fig5*/` | Core motor-error / coding-direction figure: CR–CA, CR–CL and AP–CA coding-direction comparisons, licking data, example rasters, and a supplement section on raw-trial correlations. |
@@ -339,7 +348,12 @@ Installing NumPy ≥ 2 changes pickle module paths and defeats this shim.
 ====================================================================================================
 ## Raw data inventory
 
-Due to the large size of the raw data files they are not included here in the repo but here is a summary of all files that are available upon special request
+Due to the large size of the raw data files they are not included here in the repo but here is a summary of all files that are available upon special request.
+
+Two sessions **are** published: the raw and motion-registered imaging data for the Fig2 dendrite and
+soma examples (`B00002213784` 230123 and 230124) is in
+**[kerlinlab/Scheib_2026_data](https://github.com/kerlinlab/Scheib_2026_data)**. For any other
+session, contact newmanza@umn.edu.
 
 22 animals, 167 imaging sessions (somas / dendrites) over 167 recording days, 336 raw directories, **147,203 files**, **20.07 TB** (20,073,459,670,400 bytes).
 
